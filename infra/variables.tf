@@ -18,7 +18,7 @@ variable "environment" {
 variable "state_bucket" {
   type        = string
   description = "Bucket S3 onde ficam os states dos demais stacks."
-  default     = "mechanicltda-terraform-state-430606112709"
+  default     = "mechanicltda-terraform-state-788516091173"
 }
 
 variable "kubernetes_state_key" {

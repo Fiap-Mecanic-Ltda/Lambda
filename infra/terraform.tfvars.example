@@ -1,0 +1,7 @@
+# Copie para terraform.tfvars se precisar sobrescrever algum default.
+# Nenhum segredo aqui: a connection string e a chave JWT sao lidas do SSM no
+# apply (ver data.tf). Rode scripts/build.sh antes do plan/apply - o zip da
+# funcao precisa existir em build/function.zip.
+
+# lambda_memory_size = 512
+# lambda_timeout     = 30

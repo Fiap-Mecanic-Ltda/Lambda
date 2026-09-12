@@ -1,0 +1,140 @@
+name: CI/CD - Lambda de Autenticacao
+
+# Build + testes da funcao e deploy dela (a propria funcao, o API Gateway, a
+# role e o security group sao declarados em infra/). O apply e manual: o deploy
+# recria a versao publicada da funcao em producao.
+on:
+  push:
+    branches: [main, homologacao]
+  pull_request:
+    branches: [main, homologacao]
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "O que rodar (apply exige aprovacao do Environment production)"
+        type: choice
+        default: plan
+        options: [plan, apply]
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_VERSION: "8.0.x"
+  AWS_REGION: us-east-1
+
+jobs:
+  build-and-test:
+    name: Build, testes e empacotamento
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Restore
+        run: dotnet restore MechanicLtda.Auth.sln
+
+      - name: Build
+        run: dotnet build MechanicLtda.Auth.sln --configuration Release --no-restore
+
+      - name: Testes automatizados
+        run: dotnet test MechanicLtda.Auth.sln --configuration Release --no-build --verbosity normal
+
+      # Mesmo script usado localmente: publica em linux-x64 e zipa com os
+      # arquivos na raiz, como o runtime dotnet8 espera.
+      - name: Empacota a funcao
+        run: ./scripts/build.sh
+
+      - name: Publica o pacote como artefato
+        uses: actions/upload-artifact@v4
+        with:
+          name: function-zip
+          path: build/function.zip
+          retention-days: 5
+
+  plan:
+    name: Terraform plan
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra
+    steps:
+      - uses: actions/checkout@v4
+
+      # O plan precisa do zip: aws_lambda_function le o arquivo para calcular o
+      # source_code_hash.
+      - name: Baixa o pacote da funcao
+        uses: actions/download-artifact@v4
+        with:
+          name: function-zip
+          path: build
+
+      # Chave estatica do terraform-deployer: a mesma identidade que le os
+      # states remotos dos stacks de Kubernetes e do banco.
+      - name: Configura credenciais AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "~> 1.10"
+
+      - name: Terraform fmt (check)
+        run: terraform fmt -check -recursive
+
+      - name: Terraform init
+        run: terraform init -input=false
+
+      - name: Terraform validate
+        run: terraform validate
+
+      - name: Terraform plan
+        run: terraform plan -input=false
+
+  apply:
+    name: Terraform apply (deploy da funcao)
+    needs: [build-and-test, plan]
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'apply'
+    runs-on: ubuntu-latest
+    environment: production
+    defaults:
+      run:
+        working-directory: infra
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Baixa o pacote da funcao
+        uses: actions/download-artifact@v4
+        with:
+          name: function-zip
+          path: build
+
+      - name: Configura credenciais AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "~> 1.10"
+
+      - name: Terraform init
+        run: terraform init -input=false
+
+      - name: Terraform apply
+        run: terraform apply -input=false -auto-approve
+
+      - name: Endpoint publicado
+        run: |
+          ENDPOINT=$(terraform output -raw auth_endpoint)
+          echo "::notice::Login serverless disponivel em $ENDPOINT"

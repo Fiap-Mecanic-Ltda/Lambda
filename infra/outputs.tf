@@ -36,3 +36,8 @@ output "authorizer_function_name" {
 output "vpc_link_id" {
   value = aws_apigatewayv2_vpc_link.cluster.id
 }
+
+output "alarmes_sns_topic_arn" {
+  description = "Topico SNS dos alarmes do gateway e das Lambdas."
+  value       = aws_sns_topic.alarmes.arn
+}

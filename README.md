@@ -193,6 +193,22 @@ e `403` numa rota administrativa.
 
 O Environment `production` precisa existir para o job de `apply`.
 
+## Observabilidade
+
+A aplicação é monitorada no **New Relic** (agente APM, integração Kubernetes, alertas e painel —
+ver o repositório InfraKubernete). O API Gateway e as Lambdas só aparecem lá com a integração AWS
+da conta, então este trecho tem monitoramento próprio no CloudWatch:
+
+| O quê | Onde | Sinal |
+|---|---|---|
+| Access log do gateway em JSON | `/aws/apigateway/<função>` | `requestId`, rota, status, latências, IP e erro do authorizer. O `requestId` é o mesmo `X-Correlation-Id` que chega aos logs da API |
+| Logs das funções em JSON | `/aws/lambda/<função>` e `.../<função>-authorizer` | nível, `requestId` da invocação e mensagem, sem CPF nem token |
+| Métricas por rota | `AWS/ApiGateway` (detailed metrics) | contagem, 4xx, 5xx e latência por rota |
+| Alarmes (`infra/alarmes.tf`) | tópico SNS `<função>-alarmes` | 5xx no gateway, latência p95 acima de 2 s, erros e throttling nas duas funções, pico de 4xx em `POST /auth/cpf` (força bruta ou enumeração de CPF) |
+
+`email_alarmes` inscreve um e-mail no tópico — a AWS manda uma confirmação, e nada chega antes do
+clique no link.
+
 ## Ordem de subida
 
 1. `terraform apply` no **InfraKubernete** — VPC, sub-redes (incluindo as de aplicação), ALB

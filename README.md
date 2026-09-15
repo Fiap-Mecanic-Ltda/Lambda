@@ -157,16 +157,57 @@ terraform output auth_endpoint
 1. **build-and-test** — `dotnet build` + `dotnet test`, depois `scripts/build.sh`; o zip vira
    artefato do workflow.
 2. **plan** — baixa o artefato e roda `fmt -check`, `init`, `validate` e `plan`.
-3. **apply** — só via `workflow_dispatch` com `action = apply`, protegido pelo Environment
-   `production`; ao final imprime o endpoint publicado.
+3. **apply** — **automático em push na `main`** (e manual via `workflow_dispatch`, também só a
+   partir da `main`), no Environment `production`. Depois do apply roda o
+   **smoke test** (`scripts/smoke-test.sh`) contra a URL publicada.
+
+| Branch | O que roda |
+|---|---|
+| PR para `homologacao` ou `main` | build, testes e plan |
+| push em `homologacao` | build, testes e plan — não há ambiente de homologação na AWS |
+| push em `main` | build, testes, plan, **apply** e smoke test |
+
+Se o Environment `production` tiver revisores obrigatórios, o apply espera a aprovação — com o
+log do plan já visível no mesmo run.
+
+### Smoke test
+
+```bash
+bash scripts/smoke-test.sh "$(terraform -chdir=infra output -raw api_base_url)"
+```
+
+Sem segredo nenhum, verifica: `/health` pelo VPC Link (com retry, porque o VPC Link recém-criado
+demora a ficar pronto), `/auth/cpf` com CPF inválido (`400`) e com CPF sem cadastro (`401`, que
+prova a ida ao RDS), rota protegida sem token (`401`) e com token inválido (`403`).
+
+Com `SMOKE_CPF` — o CPF de um cliente **ativo** — verifica também o fluxo que o desafio pede para
+demonstrar: token por CPF, `200` na rota das próprias ordens de serviço, `403` na de outro cliente
+e `403` numa rota administrativa.
 
 ### Secrets necessários
 
 | Nome | Tipo | Uso |
 |---|---|---|
 | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | Secret | Chave do `terraform-deployer` (também lê os states remotos dos repositórios 2 e 3) |
+| `SMOKE_CPF` | Secret (opcional) | CPF de um cliente ativo, para o smoke test cobrir o fluxo completo com token |
 
 O Environment `production` precisa existir para o job de `apply`.
+
+## Observabilidade
+
+A aplicação é monitorada no **New Relic** (agente APM, integração Kubernetes, alertas e painel —
+ver o repositório InfraKubernete). O API Gateway e as Lambdas só aparecem lá com a integração AWS
+da conta, então este trecho tem monitoramento próprio no CloudWatch:
+
+| O quê | Onde | Sinal |
+|---|---|---|
+| Access log do gateway em JSON | `/aws/apigateway/<função>` | `requestId`, rota, status, latências, IP e erro do authorizer. O `requestId` é o mesmo `X-Correlation-Id` que chega aos logs da API |
+| Logs das funções em JSON | `/aws/lambda/<função>` e `.../<função>-authorizer` | nível, `requestId` da invocação e mensagem, sem CPF nem token |
+| Métricas por rota | `AWS/ApiGateway` (detailed metrics) | contagem, 4xx, 5xx e latência por rota |
+| Alarmes (`infra/alarmes.tf`) | tópico SNS `<função>-alarmes` | 5xx no gateway, latência p95 acima de 2 s, erros e throttling nas duas funções, pico de 4xx em `POST /auth/cpf` (força bruta ou enumeração de CPF) |
+
+`email_alarmes` inscreve um e-mail no tópico — a AWS manda uma confirmação, e nada chega antes do
+clique no link.
 
 ## Ordem de subida
 

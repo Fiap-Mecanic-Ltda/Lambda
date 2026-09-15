@@ -166,3 +166,33 @@ variable "throttling_auth_burst_limit" {
   description = "Rajada nas rotas de autenticacao."
   default     = 10
 }
+
+# Alarmes (CloudWatch)
+
+variable "email_alarmes" {
+  type        = string
+  description = "E-mail inscrito no topico SNS dos alarmes. Vazio cria os alarmes sem notificacao por e-mail."
+  default     = ""
+}
+
+variable "alarme_gateway_5xx_limite" {
+  type        = number
+  description = "Respostas 5xx em 5 minutos acima das quais o alarme dispara."
+  default     = 5
+}
+
+variable "alarme_latencia_p95_ms" {
+  type        = number
+  description = "Latencia p95 do API Gateway, em ms, acima da qual o alarme dispara."
+  default     = 2000
+}
+
+variable "alarme_auth_cpf_4xx_limite" {
+  type        = number
+  description = <<-EOT
+    Respostas 4xx em POST /auth/cpf em 5 minutos acima das quais o alarme dispara.
+    Com o throttling de 5 req/s, um volume alto de 4xx indica tentativa de força
+    bruta ou de enumeração de CPF.
+  EOT
+  default     = 100
+}

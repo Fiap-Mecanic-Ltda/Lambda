@@ -75,6 +75,15 @@ resource "aws_lambda_function" "auth" {
   memory_size = var.lambda_memory_size
   timeout     = var.lambda_timeout
 
+  # Logs em JSON: cada linha sai com nivel, requestId da invocacao e mensagem,
+  # consultavel no CloudWatch Logs Insights sem parser - mesmo formato dos logs
+  # da aplicacao no cluster.
+  logging_config {
+    log_format            = "JSON"
+    application_log_level = "INFO"
+    system_log_level      = "WARN"
+  }
+
   vpc_config {
     subnet_ids         = local.db_subnet_ids
     security_group_ids = [aws_security_group.lambda.id]
@@ -139,6 +148,12 @@ resource "aws_lambda_function" "authorizer" {
 
   memory_size = var.authorizer_memory_size
   timeout     = var.authorizer_timeout
+
+  logging_config {
+    log_format            = "JSON"
+    application_log_level = "INFO"
+    system_log_level      = "WARN"
+  }
 
   environment {
     variables = {

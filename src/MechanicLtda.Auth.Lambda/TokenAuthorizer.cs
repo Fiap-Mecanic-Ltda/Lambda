@@ -74,7 +74,12 @@ public sealed class TokenAuthorizer
         {
             principal = new JwtSecurityTokenHandler().ValidateToken(token, _parametros, out _);
         }
-        catch (SecurityTokenException ex)
+        // ArgumentException tambem entra: um texto que nao tem formato de JWT nao
+        // chega a ser validado, e o handler reclama do argumento. Desde a versao 8
+        // do Microsoft.IdentityModel, SecurityTokenMalformedException herda de
+        // ArgumentException e nao de SecurityTokenException. Sem este catch, a
+        // excecao sobe, a funcao falha e o API Gateway responde 500 no lugar de 403.
+        catch (Exception ex) when (ex is SecurityTokenException or ArgumentException)
         {
             return new DecisaoAutorizacao(false, $"token invalido: {ex.GetType().Name}");
         }

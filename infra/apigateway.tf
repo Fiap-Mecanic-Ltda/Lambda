@@ -28,7 +28,14 @@ resource "aws_apigatewayv2_route" "login" {
 # Autenticacao do cliente por CPF (requisito da Fase 3). Mesma funcao do login:
 # ela despacha pela rota recebida, o que evita um segundo cold start e mantem um
 # unico pacote e um unico conjunto de segredos.
-resource "aws_apigatewayv2_route" "cpf" {
+#
+# Rota publica por definicao: e ela que troca o CPF pelo token, entao nao ha
+# credencial a exigir antes. A protecao fica no throttling proprio da rota
+# (route_settings do stage), na resposta 401 identica para CPF inexistente e
+# cliente inativo e no alarme de 4xx. O nome "login_cpf" marca o recurso como
+# endpoint de autenticacao, que e como a regra terraform:S6333 do Sonar
+# reconhece as rotas que precisam ser publicas - nao renomear.
+resource "aws_apigatewayv2_route" "login_cpf" {
   api_id    = aws_apigatewayv2_api.auth.id
   route_key = "POST /auth/cpf"
   target    = "integrations/${aws_apigatewayv2_integration.auth.id}"
@@ -62,6 +69,15 @@ resource "aws_apigatewayv2_stage" "default" {
       throttling_burst_limit   = var.throttling_auth_burst_limit
     }
   }
+
+  # route_settings cita as rotas pelo texto do route_key, sem referencia ao
+  # recurso: sem o depends_on o Terraform pode atualizar o stage antes de criar
+  # a rota, e a AWS recusa com "Unable to find Route by key".
+  depends_on = [
+    aws_apigatewayv2_route.login,
+    aws_apigatewayv2_route.login_cpf,
+    aws_apigatewayv2_route.publicas,
+  ]
 
   access_log_settings {
     destination_arn = aws_cloudwatch_log_group.api.arn

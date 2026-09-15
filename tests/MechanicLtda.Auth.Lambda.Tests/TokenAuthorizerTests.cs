@@ -64,6 +64,23 @@ public class TokenAuthorizerTests
         return handler.WriteToken(handler.CreateToken(descriptor));
     }
 
+    /// <summary>
+    /// Texto que nem parece um JWT. O handler trata isso como erro de argumento,
+    /// e nao como token invalido: sem tratar, a excecao sobe, a funcao falha e o
+    /// API Gateway responde 500 em vez de 403.
+    /// </summary>
+    [Theory]
+    [InlineData("token-invalido")]
+    [InlineData("a.b")]
+    [InlineData("....")]
+    [InlineData("eyJhbGciOiJIUzI1NiJ9.corpo-que-nao-e-base64.assinatura")]
+    public void Autorizar_TokenMalFormado_DeveNegarSemLancar(string token)
+    {
+        var decisao = CriarAutorizador().Autorizar($"Bearer {token}", RotaCliente);
+
+        Assert.False(decisao.Autorizado);
+    }
+
     [Fact]
     public void Autorizar_TokenDeClienteNaRotaDoCliente_DevePermitirEDevolverOContexto()
     {

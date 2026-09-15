@@ -38,13 +38,39 @@ public sealed class JwtTokenService
 
         claims.AddRange(usuario.Roles.Select(role => new Claim(ClaimTypes.Role, role)));
 
-        var expiracao = DateTime.UtcNow.AddMinutes(_expiracaoMinutos);
+        return Assinar(claims, _issuer, _expiracaoMinutos);
+    }
+
+    /// <summary>
+    /// Token da autenticação por CPF. Diferenças em relação ao token de usuário:
+    /// o <c>sub</c> é o Id do cliente (e não o do Identity), entra o claim
+    /// <c>clienteId</c> — que a API usa para conferir a posse do recurso —, a role
+    /// é sempre <c>Cliente</c> e o emissor é próprio, aceito pela API como segundo
+    /// issuer (<c>JwtSettings:IssuerCpf</c>). O CPF não vai no token.
+    /// </summary>
+    public TokenResponse GerarParaCliente(ClienteAutenticavel cliente, string issuer, int expiracaoMinutos)
+    {
+        var claims = new List<Claim>
+        {
+            new(JwtRegisteredClaimNames.Sub, cliente.Id.ToString()),
+            new(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()),
+            new("clienteId", cliente.Id.ToString()),
+            new("tipo",      "Cliente"),
+            new(ClaimTypes.Role, "Cliente"),
+        };
+
+        return Assinar(claims, issuer, expiracaoMinutos);
+    }
+
+    private TokenResponse Assinar(IEnumerable<Claim> claims, string issuer, int expiracaoMinutos)
+    {
+        var expiracao = DateTime.UtcNow.AddMinutes(expiracaoMinutos);
 
         var descriptor = new SecurityTokenDescriptor
         {
             Subject            = new ClaimsIdentity(claims),
             Expires            = expiracao,
-            Issuer             = _issuer,
+            Issuer             = issuer,
             Audience           = _audience,
             SigningCredentials = new SigningCredentials(
                 new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_secretKey)),

@@ -1,8 +1,13 @@
 name: CI/CD - Lambda de Autenticacao
 
-# Build + testes da funcao e deploy dela (a propria funcao, o API Gateway, a
-# role e o security group sao declarados em infra/). O apply e manual: o deploy
-# recria a versao publicada da funcao em producao.
+# Build + testes das funcoes e deploy delas (as funcoes, o API Gateway, o VPC
+# Link, as roles e os security groups sao declarados em infra/).
+#
+# - homologacao: build, testes e plan. Nao ha ambiente de homologacao na AWS
+#   (decisao do time), entao nada e aplicado a partir desta branch.
+# - main: build, testes, plan e apply AUTOMATICO, seguido do smoke test do
+#   gateway. O job de apply usa o Environment "production": se ele tiver
+#   revisores obrigatorios, o deploy espera a aprovacao depois do plan.
 on:
   push:
     branches: [main, homologacao]
@@ -100,11 +105,22 @@ jobs:
         run: terraform plan -input=false
 
   apply:
-    name: Terraform apply (deploy da funcao)
+    name: Terraform apply (deploy das funcoes e do gateway)
     needs: [build-and-test, plan]
-    if: github.event_name == 'workflow_dispatch' && inputs.action == 'apply'
+    # Automatico em push na main; manual (workflow_dispatch) so a partir da
+    # main. Sem ambiente de homologacao, disparar o apply de outra branch
+    # publicaria codigo nao revisado direto em producao.
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' ||
+       (github.event_name == 'workflow_dispatch' && inputs.action == 'apply'))
     runs-on: ubuntu-latest
     environment: production
+    # Dois merges seguidos na main nao podem aplicar em paralelo sobre o mesmo
+    # state; o segundo espera o primeiro terminar.
+    concurrency:
+      group: terraform-apply-lambda-prod
+      cancel-in-progress: false
     defaults:
       run:
         working-directory: infra
@@ -127,14 +143,29 @@ jobs:
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: "~> 1.10"
+          # Sem o wrapper: ele acrescenta linhas de log ao stdout, o que quebra
+          # o $(terraform output -raw ...) usado nos passos abaixo.
+          terraform_wrapper: false
 
       - name: Terraform init
         run: terraform init -input=false
 
+      # O apply refaz o plan em vez de reaproveitar o do job anterior: o arquivo
+      # de plan traz os segredos lidos do SSM em texto puro, e publica-lo como
+      # artefato do workflow os exporia a quem tem acesso de leitura ao repo.
       - name: Terraform apply
         run: terraform apply -input=false -auto-approve
 
-      - name: Endpoint publicado
+      - name: Endpoints publicados
         run: |
-          ENDPOINT=$(terraform output -raw auth_endpoint)
-          echo "::notice::Login serverless disponivel em $ENDPOINT"
+          echo "::notice::Gateway: $(terraform output -raw api_base_url)"
+          echo "::notice::Login por e-mail e senha: $(terraform output -raw auth_endpoint)"
+          echo "::notice::Autenticacao por CPF: $(terraform output -raw auth_cpf_endpoint)"
+
+      # Prova de fora da AWS que cada salto responde: VPC Link ate os pods, a
+      # Lambda com e sem ida ao banco e o authorizer. SMOKE_CPF (opcional) ativa
+      # o fluxo completo do cliente com token.
+      - name: Smoke test do gateway
+        env:
+          SMOKE_CPF: ${{ secrets.SMOKE_CPF }}
+        run: bash ../scripts/smoke-test.sh "$(terraform output -raw api_base_url)"

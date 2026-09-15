@@ -42,3 +42,23 @@ locals {
   db_subnet_ids = data.terraform_remote_state.kubernetes.outputs.db_subnet_ids
   rds_sg_id     = data.terraform_remote_state.sgbd.outputs.rds_security_group_id
 }
+
+# Índice cego do CPF/CNPJ. Mesmo parâmetro que alimenta o Secret da aplicação
+# (stack InfraKubernete): a aplicação grava o hash e esta função consulta por
+# ele. Lido no apply, pelo mesmo motivo dos outros segredos.
+data "aws_ssm_parameter" "cpf_hash_key" {
+  name            = "/${var.project_name}/${var.environment}/cpf-hash-key"
+  with_decryption = true
+}
+
+# CIDR da VPC: destino do egress das ENIs do VPC Link (o ALB interno).
+data "aws_vpc" "main" {
+  id = local.vpc_id
+}
+
+locals {
+  # Entrada privada do cluster e sub-redes onde o VPC Link cria as ENIs, ambas
+  # publicadas pelo stack InfraKubernete.
+  alb_listener_arn = data.terraform_remote_state.kubernetes.outputs.alb_listener_arn
+  app_subnet_ids   = data.terraform_remote_state.kubernetes.outputs.app_subnet_ids
+}

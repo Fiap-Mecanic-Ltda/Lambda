@@ -165,7 +165,19 @@ jobs:
       # Prova de fora da AWS que cada salto responde: VPC Link ate os pods, a
       # Lambda com e sem ida ao banco e o authorizer. SMOKE_CPF (opcional) ativa
       # o fluxo completo do cliente com token.
+      #
+      # Nao bloqueante de proposito: ele checa o ambiente (cluster, banco e dados
+      # de producao), e nao o que este apply acabou de publicar. Falha aqui vira
+      # aviso no resumo do run - a infraestrutura ja foi aplicada com sucesso.
+      # Para exigir que passe, troque continue-on-error por false.
       - name: Smoke test do gateway
+        id: smoke
+        continue-on-error: true
         env:
           SMOKE_CPF: ${{ secrets.SMOKE_CPF }}
         run: bash ../scripts/smoke-test.sh "$(terraform output -raw api_base_url)"
+
+      - name: Resultado do smoke test
+        if: steps.smoke.outcome == 'failure'
+        run: |
+          echo "::warning::O smoke test do gateway falhou. O apply foi concluido; veja o passo anterior para o que nao respondeu como esperado."

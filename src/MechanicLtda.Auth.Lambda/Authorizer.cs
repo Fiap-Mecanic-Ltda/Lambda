@@ -40,9 +40,8 @@ public sealed class AuthorizerResponse
 /// </summary>
 public sealed class Authorizer
 {
-    private static readonly TokenAuthorizer Autorizador = new(
-        secretKey: Environment.GetEnvironmentVariable("JWT_SECRET_KEY")
-                   ?? throw new InvalidOperationException("Variavel de ambiente 'JWT_SECRET_KEY' nao configurada na funcao."),
+    private static readonly Lazy<TokenAuthorizer> Padrao = new(() => new TokenAuthorizer(
+        secretKey: DependenciasAutenticacao.LerObrigatoria("JWT_SECRET_KEY"),
         issuers:
         [
             Environment.GetEnvironmentVariable("JWT_ISSUER")     ?? "MechanicLtda.API",
@@ -50,12 +49,22 @@ public sealed class Authorizer
         ],
         audience: Environment.GetEnvironmentVariable("JWT_AUDIENCE") ?? "MechanicLtda.Clients",
         rotasDoCliente: (Environment.GetEnvironmentVariable("ROTAS_DO_CLIENTE")
-                         ?? "GET /api/ordemservico/cliente/{clienteId}").Split(';'));
+                         ?? "GET /api/ordemservico/cliente/{clienteId}").Split(';')));
+
+    private readonly TokenAuthorizer _autorizador;
+
+    /// <summary>Usado pelo runtime do Lambda: le a configuracao das variaveis de ambiente.</summary>
+    public Authorizer() : this(Padrao.Value)
+    {
+    }
+
+    /// <summary>Permite trocar a configuracao do token (testes).</summary>
+    public Authorizer(TokenAuthorizer autorizador) => _autorizador = autorizador;
 
     public AuthorizerResponse FunctionHandler(AuthorizerRequest request, ILambdaContext context)
     {
         var header = ObterHeader(request, "authorization");
-        var decisao = Autorizador.Autorizar(header, request.RouteKey);
+        var decisao = _autorizador.Autorizar(header, request.RouteKey);
 
         if (!decisao.Autorizado)
         {

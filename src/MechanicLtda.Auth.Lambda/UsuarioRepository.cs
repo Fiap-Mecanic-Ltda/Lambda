@@ -1,4 +1,5 @@
 using Microsoft.Data.SqlClient;
+using System.Diagnostics.CodeAnalysis;
 
 namespace MechanicLtda.Auth.Lambda;
 
@@ -7,7 +8,11 @@ namespace MechanicLtda.Auth.Lambda;
 /// AspNetUserRoles) criadas pelas migrations da aplicacao. A funcao nao aplica
 /// migration nenhuma: o schema e sempre de responsabilidade da API.
 /// </summary>
-public sealed class UsuarioRepository
+// Adaptador de I/O puro (SQL contra o RDS): sem regra de negocio para testar em
+// unidade. A logica que usa o resultado esta coberta pelos testes da Function com
+// repositorios falsos, e a consulta real e exercitada pelo smoke test do deploy.
+[ExcludeFromCodeCoverage]
+public sealed class UsuarioRepository : IUsuarioRepository
 {
     private const string SqlUsuario = """
         SELECT TOP 1 u.Id, u.UserName, u.Email, u.PasswordHash, u.Tipo, u.Ativo

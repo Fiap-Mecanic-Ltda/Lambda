@@ -1,4 +1,5 @@
 using Microsoft.Data.SqlClient;
+using System.Diagnostics.CodeAnalysis;
 
 namespace MechanicLtda.Auth.Lambda;
 
@@ -7,7 +8,11 @@ namespace MechanicLtda.Auth.Lambda;
 /// leitura: o schema é responsabilidade das migrations da aplicação, e a função
 /// nunca escreve nada.
 /// </summary>
-public sealed class ClienteRepository
+// Adaptador de I/O puro (SQL contra o RDS): sem regra de negocio para testar em
+// unidade. A logica que usa o resultado esta coberta pelos testes da Function com
+// repositorios falsos, e a consulta real e exercitada pelo smoke test do deploy.
+[ExcludeFromCodeCoverage]
+public sealed class ClienteRepository : IClienteRepository
 {
     // Só as colunas necessárias para autenticar e montar o token. CpfCnpj (o
     // valor cifrado) não é lido: a função não tem a chave de criptografia nem

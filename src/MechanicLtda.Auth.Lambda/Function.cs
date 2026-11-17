@@ -12,35 +12,22 @@ public sealed class Function
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
-    // Reaproveitados entre invocacoes no mesmo container (o custo de ler as
-    // variaveis e montar o hasher so e pago no cold start).
-    private static readonly string ConnectionString = LerObrigatoria("DB_CONNECTION_STRING");
-    private static readonly string JwtSecretKey     = LerObrigatoria("JWT_SECRET_KEY");
-
-    private static readonly JwtTokenService TokenService = new(
-        JwtSecretKey,
-        Environment.GetEnvironmentVariable("JWT_ISSUER")   ?? "MechanicLtda.API",
-        Environment.GetEnvironmentVariable("JWT_AUDIENCE") ?? "MechanicLtda.Clients",
-        int.TryParse(Environment.GetEnvironmentVariable("JWT_EXPIRACAO_MINUTOS"), out var minutos) ? minutos : 60);
-
-    private static readonly UsuarioRepository Repositorio        = new(ConnectionString);
-    private static readonly ClienteRepository ClienteRepositorio = new(ConnectionString);
+    // Montadas uma vez por container (o custo de ler as variaveis e abrir a
+    // configuracao so e pago no cold start) e reaproveitadas entre invocacoes.
+    private static readonly Lazy<DependenciasAutenticacao> Padrao = new(DependenciasAutenticacao.DoAmbiente);
 
     // Mesmo formato de hash gravado pela API (Identity v3, PBKDF2-HMAC-SHA256).
     private static readonly PasswordHasher<UsuarioAutenticavel> Hasher = new();
 
-    // Autenticacao por CPF. A chave do indice cego nao entra em LerObrigatoria
-    // de proposito: se faltar, so a rota /auth/cpf fica indisponivel (com log
-    // explicito) - o login por e-mail e senha continua de pe.
-    private static readonly string? CpfHashKey = Environment.GetEnvironmentVariable("CPF_HASH_KEY");
+    private readonly DependenciasAutenticacao _dependencias;
 
-    private static readonly string IssuerCpf =
-        Environment.GetEnvironmentVariable("JWT_ISSUER_CPF") ?? "MechanicLtda.Auth.Cpf";
+    /// <summary>Usado pelo runtime do Lambda: le a configuracao das variaveis de ambiente.</summary>
+    public Function() : this(Padrao.Value)
+    {
+    }
 
-    // Janela curta: o token de cliente e obtido so com o CPF, entao vale menos
-    // tempo que o token de funcionario (que exige senha).
-    private static readonly int ExpiracaoCpfMinutos =
-        int.TryParse(Environment.GetEnvironmentVariable("JWT_CPF_EXPIRACAO_MINUTOS"), out var m) ? m : 30;
+    /// <summary>Permite trocar banco e configuracao (testes).</summary>
+    public Function(DependenciasAutenticacao dependencias) => _dependencias = dependencias;
 
     public async Task<APIGatewayHttpApiV2ProxyResponse> FunctionHandler(
         APIGatewayHttpApiV2ProxyRequest request, ILambdaContext context)
@@ -65,14 +52,14 @@ public sealed class Function
 
     // ── POST /auth/login ─────────────────────────────────────────────────────
 
-    private static async Task<APIGatewayHttpApiV2ProxyResponse> AutenticarPorSenhaAsync(
+    private async Task<APIGatewayHttpApiV2ProxyResponse> AutenticarPorSenhaAsync(
         APIGatewayHttpApiV2ProxyRequest request)
     {
         var login = Desserializar<LoginRequest>(request);
         if (login is null || string.IsNullOrWhiteSpace(login.Email) || string.IsNullOrWhiteSpace(login.Senha))
             return Resposta(400, new ErroResponse { Mensagem = "Informe e-mail e senha." });
 
-        var usuario = await Repositorio.BuscarPorEmailAsync(login.Email!);
+        var usuario = await _dependencias.Usuarios.BuscarPorEmailAsync(login.Email!);
 
         // Mesma mensagem generica da API para os tres casos (inexistente,
         // inativo, senha errada): detalhar aqui entregaria de graca quais
@@ -86,15 +73,16 @@ public sealed class Function
 
         // SuccessRehashNeeded e sucesso: quem regrava o hash com os
         // parametros novos e a API, no proximo login por la.
-        return Resposta(200, TokenService.Gerar(usuario));
+        return Resposta(200, _dependencias.TokenService.Gerar(usuario));
     }
 
     // ── POST /auth/cpf ───────────────────────────────────────────────────────
 
-    private static async Task<APIGatewayHttpApiV2ProxyResponse> AutenticarPorCpfAsync(
+    private async Task<APIGatewayHttpApiV2ProxyResponse> AutenticarPorCpfAsync(
         APIGatewayHttpApiV2ProxyRequest request, ILambdaContext context)
     {
-        if (string.IsNullOrWhiteSpace(CpfHashKey))
+        var cpfHashKey = _dependencias.CpfHashKey;
+        if (string.IsNullOrWhiteSpace(cpfHashKey))
         {
             context.Logger.LogError("CPF_HASH_KEY nao configurada: autenticacao por CPF indisponivel.");
             return Resposta(503, new ErroResponse { Mensagem = "Autenticacao por CPF indisponivel." });
@@ -107,8 +95,8 @@ public sealed class Function
         if (!CpfValidator.EhValido(corpo?.Cpf))
             return Resposta(400, new ErroResponse { Mensagem = "CPF invalido." });
 
-        var hash    = DocumentoHash.Gerar(corpo!.Cpf, CpfHashKey!);
-        var cliente = await ClienteRepositorio.BuscarPorHashAsync(hash);
+        var hash    = DocumentoHash.Gerar(corpo!.Cpf, cpfHashKey);
+        var cliente = await _dependencias.Clientes.BuscarPorHashAsync(hash);
 
         // Inexistente e inativo devolvem a mesma resposta: distinguir os dois
         // permitiria descobrir, um CPF por vez, quem e cliente da oficina.
@@ -121,7 +109,7 @@ public sealed class Function
             return Resposta(401, new ErroResponse { Mensagem = "Nao foi possivel autenticar com o CPF informado." });
         }
 
-        var token = TokenService.GerarParaCliente(cliente, IssuerCpf, ExpiracaoCpfMinutos);
+        var token = _dependencias.TokenService.GerarParaCliente(cliente, _dependencias.IssuerCpf, _dependencias.ExpiracaoCpfMinutos);
 
         return Resposta(200, new TokenClienteResponse
         {
@@ -158,8 +146,4 @@ public sealed class Function
         Body       = JsonSerializer.Serialize(corpo, JsonOptions),
         Headers    = new Dictionary<string, string> { ["Content-Type"] = "application/json" },
     };
-
-    private static string LerObrigatoria(string nome) =>
-        Environment.GetEnvironmentVariable(nome)
-        ?? throw new InvalidOperationException($"Variavel de ambiente '{nome}' nao configurada na funcao.");
 }

@@ -26,6 +26,7 @@ permissions:
 
 env:
   DOTNET_VERSION: "8.0.x"
+  COBERTURA_MINIMA: 80
   AWS_REGION: us-east-1
 
 jobs:
@@ -47,7 +48,20 @@ jobs:
         run: dotnet build MechanicLtda.Auth.sln --configuration Release --no-restore
 
       - name: Testes automatizados
-        run: dotnet test MechanicLtda.Auth.sln --configuration Release --no-build --verbosity normal
+        run: >
+          dotnet test MechanicLtda.Auth.sln --configuration Release --no-build --verbosity normal
+          --collect:"XPlat Code Coverage" --results-directory coverage
+
+      - name: Relatorio de cobertura
+        if: always()
+        run: |
+          dotnet tool install --global dotnet-reportgenerator-globaltool --version 5.5.12
+          reportgenerator -reports:"coverage/**/coverage.cobertura.xml" -targetdir:coverage/relatorio \
+            -reporttypes:"Cobertura;MarkdownSummaryGithub"
+          cat coverage/relatorio/SummaryGithub.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Cobertura minima de ${{ env.COBERTURA_MINIMA }}%
+        run: python3 scripts/verificar-cobertura.py coverage/relatorio/Cobertura.xml "$COBERTURA_MINIMA"
 
       # Mesmo script usado localmente: publica em linux-x64 e zipa com os
       # arquivos na raiz, como o runtime dotnet8 espera.
